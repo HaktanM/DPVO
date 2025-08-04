@@ -6,7 +6,7 @@ from pathlib import Path
 from itertools import chain
 import glob
 
-class StereoReader:
+class StereoStream:
     def __init__(self, image_dirs, calib, stride =2, maxsize=8):
         self.queue      = Queue(maxsize=maxsize)
         self.image_dirs = image_dirs
