@@ -95,6 +95,9 @@ def run(cfg, network, imagedir, calib, stride=1, skip=0, viz=False, timeit=False
         (t, image, intrinsics) = queue.get()
         if t < 0: break
 
+        cv2.imshow("Frame", image)
+        cv2.waitKey(10)
+
         image = torch.from_numpy(image).permute(2,0,1).cuda()
         intrinsics = torch.from_numpy(intrinsics).cuda()
 
