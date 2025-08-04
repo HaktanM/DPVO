@@ -374,7 +374,7 @@ class DPVO:
         return flatmeshgrid(torch.arange(t0, t1, device="cuda"),
             torch.arange(max(self.n-r, 0), self.n, device="cuda"), indexing='ij')
 
-    def __call__(self, tstamp, image, intrinsics):
+    def __call__(self, tstamp, image, intrinsics, right_frame=False):
         """ track new frame """
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:

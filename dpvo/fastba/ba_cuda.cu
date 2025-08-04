@@ -48,7 +48,7 @@ actSO3(const float *q, const float *X, float *Y) {
 __device__  void
 actSE3(const float *t, const float *q, const float *X, float *Y) {
   actSO3(q, X, Y);
-  Y[3] = X[3];
+  Y[3]  = X[3];
   Y[0] += X[3] * t[0];
   Y[1] += X[3] * t[1];
   Y[2] += X[3] * t[2];
@@ -71,12 +71,28 @@ adjSE3(const float *t, const float *q, const float *X, float *Y) {
   Y[5] += v[2];
 }
 
+
+// Omega(qj) = 
+//  qj[3]  -qj[2]   qj[1]   qj[0]
+//  qj[2]   qj[3]  -qj[0]   qj[1]
+// -qj[1]   qj[0]   qj[3]   qj[2]
+// -qj[0]  -qj[1]  -qj[2]   qj[3]
+
+// qi_inv = (-qi[0],-qi[1],-qi[2],qi[3])
+
+// qi is g to i
+// ti is g in i
+// qij is i to j 
+// tij is i in j
+
 __device__ void 
 relSE3(const float *ti, const float *qi, const float *tj, const float *qj, float *tij, float *qij) {
-  qij[0] = -qj[3] * qi[0] + qj[0] * qi[3] - qj[1] * qi[2] + qj[2] * qi[1],
-  qij[1] = -qj[3] * qi[1] + qj[1] * qi[3] - qj[2] * qi[0] + qj[0] * qi[2],
-  qij[2] = -qj[3] * qi[2] + qj[2] * qi[3] - qj[0] * qi[1] + qj[1] * qi[0],
-  qij[3] =  qj[3] * qi[3] + qj[0] * qi[0] + qj[1] * qi[1] + qj[2] * qi[2],
+
+  // Omega(qj) @ qi_inv
+  qij[0] = -qj[3] * qi[0]  +  qj[2] * qi[1]  -  qj[1] * qi[2]  +  qj[0] * qi[3];
+  qij[1] = -qj[2] * qi[0]  -  qj[3] * qi[1]  +  qj[0] * qi[2]  +  qj[1] * qi[3];
+  qij[2] =  qj[1] * qi[0]  -  qj[0] * qi[1]  -  qj[3] * qi[2]  +  qj[2] * qi[3];
+  qij[3] =  qj[0] * qi[0]  +  qj[1] * qi[1]  +  qj[2] * qi[2]  +  qj[3] * qi[3];
 
   actSO3(qij, ti, tij);
   tij[0] = tj[0] - tij[0];
@@ -109,6 +125,7 @@ expSO3(const float *phi, float* q) {
 
 }
 
+// This is cross product
 __device__ void
 crossInplace(const float* a, float *b) {
   float x[3] = {
@@ -162,10 +179,10 @@ retrSE3(const float *xi, const float* t, const float* q, float* t1, float* q1) {
   
   expSE3(xi, dt, dq);
 
-  q1[0] = dq[3] * q[0] + dq[0] * q[3] + dq[1] * q[2] - dq[2] * q[1];
-  q1[1] = dq[3] * q[1] + dq[1] * q[3] + dq[2] * q[0] - dq[0] * q[2];
-  q1[2] = dq[3] * q[2] + dq[2] * q[3] + dq[0] * q[1] - dq[1] * q[0];
-  q1[3] = dq[3] * q[3] - dq[0] * q[0] - dq[1] * q[1] - dq[2] * q[2];
+  q1[0] =   dq[3] * q[0] - dq[2] * q[1] + dq[1] * q[2] + dq[0] * q[3];
+  q1[1] =   dq[2] * q[0] + dq[3] * q[1] - dq[0] * q[2] + dq[1] * q[3];
+  q1[2] = - dq[1] * q[0] + dq[0] * q[1] + dq[3] * q[2] + dq[2] * q[3];
+  q1[3] = - dq[0] * q[0] - dq[1] * q[1] - dq[2] * q[2] + dq[3] * q[3];
 
   actSO3(dq, t, t1);
   t1[0] += dt[0];
