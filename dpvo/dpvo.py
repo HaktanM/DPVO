@@ -132,8 +132,16 @@ class DPVO:
         return self.pg.patches_.view(1, self.N*self.M, 3, 3, 3)
 
     @property
-    def intrinsics(self):
-        return self.pg.intrinsics_.view(1, self.N, 4)
+    def intrinsics_p(self):
+        return self.pg.intrinsics_p_.view(1, self.N, 4)
+    
+    @property
+    def intrinsics_s(self):
+        return self.pg.intrinsics_s_.view(1, self.N, 4)
+    
+    @property
+    def extrinsics(self):
+        return self.pg.extrinsics_.view(1, self.N, 7)
 
     @property
     def ix(self):
@@ -209,7 +217,7 @@ class DPVO:
     def reproject(self, indicies=None):
         """ reproject patch k from i -> j """
         (ii, jj, kk) = indicies if indicies is not None else (self.pg.ii, self.pg.jj, self.pg.kk)
-        coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk)
+        coords = pops.transform(SE3(self.poses), self.patches, self.intrinsics_p, ii, jj, kk)
         return coords.permute(0, 1, 4, 2, 3).contiguous()
 
     def append_factors(self, ii, jj):
@@ -260,7 +268,7 @@ class DPVO:
         jj = self.pg.jj[k]
         kk = self.pg.kk[k]
 
-        flow, _ = pops.flow_mag(SE3(self.poses), self.patches, self.intrinsics, ii, jj, kk, beta=0.5)
+        flow, _ = pops.flow_mag(SE3(self.poses), self.patches, self.intrinsics_p, ii, jj, kk, beta=0.5)
         return flow.mean().item()
 
     def keyframe(self):
@@ -289,7 +297,8 @@ class DPVO:
                 self.pg.colors_[i] = self.pg.colors_[i+1]
                 self.pg.poses_[i] = self.pg.poses_[i+1]
                 self.pg.patches_[i] = self.pg.patches_[i+1]
-                self.pg.intrinsics_[i] = self.pg.intrinsics_[i+1]
+                self.pg.intrinsics_p_[i] = self.pg.intrinsics_p_[i+1]
+                self.pg.intrinsics_s_[i] = self.pg.intrinsics_s_[i+1]
 
                 self.imap_[i % self.pmem] = self.imap_[(i+1) % self.pmem]
                 self.gmap_[i % self.pmem] = self.gmap_[(i+1) % self.pmem]
@@ -321,7 +330,7 @@ class DPVO:
         self.pg.normalize()
         lmbda = torch.as_tensor([1e-4], device="cuda")
         t0 = self.pg.ii.min().item()
-        fastba.BA(self.poses, self.patches, self.intrinsics,
+        fastba.BA(self.poses, self.patches, self.intrinsics_p,
             full_target, full_weight, lmbda, full_ii, full_jj, full_kk, t0, self.n, M=self.M, iterations=2, eff_impl=True)
         self.ran_global_ba[self.n] = True
 
@@ -350,12 +359,12 @@ class DPVO:
                 else:
                     t0 = self.n - self.cfg.OPTIMIZATION_WINDOW if self.is_initialized else 1
                     t0 = max(t0, 1)
-                    fastba.BA(self.poses, self.patches, self.intrinsics, 
+                    fastba.BA(self.poses, self.patches, self.intrinsics_p, self.intrinsics_s, self.extrinsics, 
                         target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
             except:
                 print("Warning BA failed...")
 
-            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
+            points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics_p, self.ix[:self.m])
             points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
             self.pg.points_[:len(points)] = points[:]
 
@@ -374,23 +383,30 @@ class DPVO:
         return flatmeshgrid(torch.arange(t0, t1, device="cuda"),
             torch.arange(max(self.n-r, 0), self.n, device="cuda"), indexing='ij')
 
-    def __call__(self, tstamp, image, intrinsics, right_frame=False):
+    def __call__(self, tstamp, images, intrinsics_p, intrinsics_s, extrinsics, right_frame=False):
         """ track new frame """
 
+        image_p = images[0]
+        image_s = images[1]
+
         if self.cfg.CLASSIC_LOOP_CLOSURE:
-            self.long_term_lc(image, self.n)
+            self.long_term_lc(image_p, self.n)
 
         if (self.n+1) >= self.N:
             raise Exception(f'The buffer size is too small. You can increase it using "--opts BUFFER_SIZE={self.N*2}"')
 
-        if self.viewer is not None:
-            self.viewer.update_image(image.contiguous())
-
-        image = 2 * (image[None,None] / 255.0) - 0.5
+        image_p = 2 * (image_p[None,None] / 255.0) - 0.5
+        image_s = 2 * (image_s[None,None] / 255.0) - 0.5
         
         with autocast(enabled=self.cfg.MIXED_PRECISION):
             fmap, gmap, imap, patches, _, clr = \
-                self.network.patchify(image,
+                self.network.patchify(image_p,
+                    patches_per_image=self.cfg.PATCHES_PER_FRAME, 
+                    centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
+                    return_color=True)
+            
+            fmap_s, gmap_s, imap_s, patches_s, __s, clr_s = \
+                self.network.patchify(image_s,
                     patches_per_image=self.cfg.PATCHES_PER_FRAME, 
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
@@ -398,7 +414,9 @@ class DPVO:
         ### update state attributes ###
         self.tlist.append(tstamp)
         self.pg.tstamps_[self.n] = self.counter
-        self.pg.intrinsics_[self.n] = intrinsics / self.RES
+        self.pg.intrinsics_p_[self.n] = intrinsics_p / self.RES
+        self.pg.intrinsics_s_[self.n] = intrinsics_s / self.RES
+        self.pg.extrinsics_[self.n]   = extrinsics
 
         # color info for visualization
         clr = (clr[0,:,[2,1,0]] + 0.5) * (255.0 / 2)

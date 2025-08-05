@@ -10,7 +10,9 @@
 std::vector<torch::Tensor> cuda_ba(
     torch::Tensor poses,
     torch::Tensor patches,
-    torch::Tensor intrinsics,
+    torch::Tensor intrinsics_p,
+    torch::Tensor intrinsics_s,
+    torch::Tensor extrinsics,
     torch::Tensor target,
     torch::Tensor weight,
     torch::Tensor lmbda,
@@ -32,7 +34,9 @@ torch::Tensor cuda_reproject(
 std::vector<torch::Tensor> ba(
     torch::Tensor poses,
     torch::Tensor patches,
-    torch::Tensor intrinsics,
+    torch::Tensor intrinsics_p,
+    torch::Tensor intrinsics_s,
+    torch::Tensor extrinsics,
     torch::Tensor target,
     torch::Tensor weight,
     torch::Tensor lmbda,
@@ -41,7 +45,7 @@ std::vector<torch::Tensor> ba(
     torch::Tensor kk,
     int PPF,
     int t0, int t1, int iterations, bool eff_impl) {
-  return cuda_ba(poses, patches, intrinsics, target, weight, lmbda, ii, jj, kk, PPF, t0, t1, iterations, eff_impl);
+  return cuda_ba(poses, patches, intrinsics_p, intrinsics_s, extrinsics, target, weight, lmbda, ii, jj, kk, PPF, t0, t1, iterations, eff_impl);
 }
 
 

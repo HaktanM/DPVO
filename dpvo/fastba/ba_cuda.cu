@@ -445,12 +445,12 @@ __global__ void reproject(
   }
 }
 
-
-
 std::vector<torch::Tensor> cuda_ba(
     torch::Tensor poses,
     torch::Tensor patches,
-    torch::Tensor intrinsics,
+    torch::Tensor intrinsics_p,
+    torch::Tensor intrinsics_s,
+    torch::Tensor extrinsics,
     torch::Tensor target,
     torch::Tensor weight,
     torch::Tensor lmbda,
@@ -460,7 +460,6 @@ std::vector<torch::Tensor> cuda_ba(
     const int PPF,
     const int t0, const int t1, const int iterations, bool eff_impl)
 {
-
   auto ktuple = torch::_unique(kk, true, true);
   torch::Tensor kx = std::get<0>(ktuple);
   torch::Tensor ku = std::get<1>(ktuple);
@@ -474,7 +473,7 @@ std::vector<torch::Tensor> cuda_ba(
 
   poses = poses.view({-1, 7});
   patches = patches.view({-1,3,P,P});
-  intrinsics = intrinsics.view({-1, 4});
+  intrinsics_p = intrinsics_p.view({-1, 4});
 
   target = target.view({-1, 2});
   weight = weight.view({-1, 2});
@@ -512,7 +511,7 @@ std::vector<torch::Tensor> cuda_ba(
     reprojection_residuals_and_hessian<<<NUM_BLOCKS(ii.size(0)), NUM_THREADS>>>(
       poses.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       patches.packed_accessor32<float,4,torch::RestrictPtrTraits>(),
-      intrinsics.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
+      intrinsics_p.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       target.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       weight.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       lmbda.packed_accessor32<float,1,torch::RestrictPtrTraits>(),

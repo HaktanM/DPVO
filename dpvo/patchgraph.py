@@ -26,7 +26,9 @@ class PatchGraph:
         self.tstamps_ = np.zeros(self.N, dtype=np.int64)
         self.poses_ = torch.zeros(self.N, 7, dtype=torch.float, device="cuda")
         self.patches_ = torch.zeros(self.N, self.M, 3, self.P, self.P, dtype=torch.float, device="cuda")
-        self.intrinsics_ = torch.zeros(self.N, 4, dtype=torch.float, device="cuda")
+        self.intrinsics_p_ = torch.zeros(self.N, 4, dtype=torch.float, device="cuda")
+        self.intrinsics_s_ = torch.zeros(self.N, 4, dtype=torch.float, device="cuda")
+        self.extrinsics_   = torch.zeros(self.N, 7, dtype=torch.float, device="cuda")
 
         self.points_ = torch.zeros(self.N * self.M, 3, dtype=torch.float, device="cuda")
         self.colors_ = torch.zeros(self.N, self.M, 3, dtype=torch.uint8, device="cuda")
@@ -68,7 +70,7 @@ class PatchGraph:
         ii = self.ix[kk]
 
         # Remove edges which have too large flow magnitude
-        flow_mg, val = pops.flow_mag(SE3(self.poses), self.patches[...,1,1].view(1,-1,3,1,1), self.intrinsics, ii, jj, kk, beta=0.5)
+        flow_mg, val = pops.flow_mag(SE3(self.poses), self.patches[...,1,1].view(1,-1,3,1,1), self.intrinsics_p, ii, jj, kk, beta=0.5)
         flow_mg_sum = reduce(flow_mg * val, '1 (fl M) 1 1 -> fl', 'sum', M=self.M).float()
         num_val = reduce(val, '1 (fl M) 1 1 -> fl', 'sum', M=self.M).clamp(min=1)
         flow_mag = torch.where(num_val > (self.M * 0.75), flow_mg_sum / num_val, torch.inf)
@@ -90,7 +92,7 @@ class PatchGraph:
             self.delta[t] = (t0, dP.scale(s))
         self.poses_[:self.n] = (SE3(self.poses_[:self.n]) * SE3(self.poses_[[0]]).inv()).data
 
-        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics, self.ix[:self.m])
+        points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics_p, self.ix[:self.m])
         points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
         self.points_[:len(points)] = points[:]
 
@@ -103,8 +105,12 @@ class PatchGraph:
         return self.patches_.view(1, self.N*self.M, 3, 3, 3)
 
     @property
-    def intrinsics(self):
-        return self.intrinsics_.view(1, self.N, 4)
+    def intrinsics_p(self):
+        return self.intrinsics_p_.view(1, self.N, 4)
+    
+    @property
+    def intrinsics_s(self):
+        return self.intrinsics_s_.view(1, self.N, 4)
 
     @property
     def ix(self):

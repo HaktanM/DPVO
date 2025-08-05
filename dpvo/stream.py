@@ -5,22 +5,49 @@ from multiprocessing import Process, Queue
 from pathlib import Path
 from itertools import chain
 import glob
+import yaml
+import pypose as pp
+import torch
 
+def load_yaml(filename):
+    with open(filename, "r") as f:
+        return yaml.safe_load(f)
+    
 class StereoStream:
-    def __init__(self, image_dirs, calib, stride =2, maxsize=8):
+    def __init__(self, image_dirs, calib, stride = 2, maxsize=8):
         self.queue      = Queue(maxsize=maxsize)
         self.image_dirs = image_dirs
 
-        self.calib = np.loadtxt(calib, delimiter=" ")
-        self.fx, self.fy, self.cx, self.cy = self.calib[:4]
+        self.calib = load_yaml(calib)
+        self.fx_p, self.fy_p, self.cx_p, self.cy_p = np.array(self.calib['cam0']['intrinsics'])
+        self.fx_s, self.fy_s, self.cx_s, self.cy_s = np.array(self.calib['cam1']['intrinsics'])
 
         self.stride     = stride
 
-        self.K = np.eye(3)
-        self.K[0,0] = self.fx
-        self.K[0,2] = self.cx
-        self.K[1,1] = self.fy
-        self.K[1,2] = self.cy
+        # Load the intrinsics for primary camera
+        self.K_p      = np.eye(3)
+        self.K_p[0,0] = self.fx_p
+        self.K_p[0,2] = self.cx_p
+        self.K_p[1,1] = self.fy_p
+        self.K_p[1,2] = self.cy_p
+        self.distortion_coeffs_p = np.array(self.calib['cam0']['distortion_coeffs'])
+
+        # Load the intrinsics for secondary camera
+        self.K_s      = np.eye(3)
+        self.K_s[0,0] = self.fx_s
+        self.K_s[0,2] = self.cx_s
+        self.K_s[1,1] = self.fy_s
+        self.K_s[1,2] = self.cy_s
+        self.distortion_coeffs_s = np.array(self.calib['cam1']['distortion_coeffs'])
+
+        # Load the extrinsic calibration:
+        # Rigid transformation from primary camera frame to secondary camera frame
+        self.T_p_to_s = np.array(self.calib['T_cam0_to_cam1']).reshape(4,4)
+        T_p_to_s_torch = torch.tensor(self.T_p_to_s, dtype=torch.float32)
+        T_p_to_s_pp    = pp.from_matrix(T_p_to_s_torch, ltype=pp.SE3_type, check=False)
+        t = T_p_to_s_pp.translation()           # shape (3,)
+        quat = T_p_to_s_pp.rotation()
+        self.p_to_s = torch.cat([t, quat], dim=0).unsqueeze(0)  # shape (1,7)
 
         # Collect images
         self.img_exts  = ["*.png", "*.jpeg", "*.jpg"]
@@ -48,18 +75,20 @@ class StereoStream:
             # The primary image has to exits
             path_to_primary_image = os.path.join(self.image_dirs[0], img_name)
             image_p      = cv2.imread(str(path_to_primary_image))
-            intrinsics_p = np.array([self.fx, self.fy, self.cx, self.cy])
+            image_p      = cv2.undistort(image_p, self.K_p, self.distortion_coeffs_p)
+            intrinsics_p = np.array([self.fx_p, self.fy_p, self.cx_p, self.cy_p])
 
             # Get the secondary image
             path_to_secondary_image = os.path.join(self.image_dirs[1], img_name)
             image_s      = cv2.imread(str(path_to_secondary_image))
-            intrinsics_s = np.array([self.fx, self.fy, self.cx, self.cy])
+            image_s      = cv2.undistort(image_s, self.K_s, self.distortion_coeffs_s)
+            intrinsics_s = np.array([self.fx_s, self.fy_s, self.cx_s, self.cy_s])
 
             h, w, _ = image_s.shape
             image_s = image_s[:h-h%16, :w-w%16]
 
-            self.queue.put((t, image_p, intrinsics_p, image_s, intrinsics_s))
-        self.queue.put((-1, image_p, intrinsics_p, image_s, intrinsics_s))
+            self.queue.put((t, image_p, intrinsics_p, image_s, intrinsics_s, self.p_to_s.clone()))
+        self.queue.put((-1, image_p, intrinsics_p, image_s, intrinsics_s, self.p_to_s.clone()))
 
 def image_stream(queue, imagedir, calib, stride, skip=0):
     """ image generator """

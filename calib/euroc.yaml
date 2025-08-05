@@ -1,0 +1,17 @@
+cam0:
+  camera_model: pinhole
+  distortion_coeffs: [-0.28340811, 0.07395907, 0.00019359, 1.76187114e-05]
+  distortion_model: radial-tangential
+  intrinsics: [458.654, 457.296, 367.215, 248.375] #fu, fv, cu, cv
+  resolution: [752, 480]
+cam1:
+  camera_model: pinhole
+  distortion_coeffs: [-0.28368365,0.07451284,-0.00010473,-3.55590700e-05]
+  distortion_model: radial-tangential
+  intrinsics: [457.587, 456.134, 379.999, 255.238] #fu, fv, cu, cv
+  resolution: [752, 480]
+T_cam0_to_cam1:
+  - [9.99997256e-01,  2.31206719e-03,  3.76008102e-04, -1.10073808e-01]
+  - [-2.31713572e-03,  9.99898049e-01,  1.40898358e-02,  3.99121547e-04]
+  - [-0.0257744366974, 0.00375618835797, 0.999660727178, 0.00981073058949]
+  - [0.0, 0.0, 0.0, 1.0]

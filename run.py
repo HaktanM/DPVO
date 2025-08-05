@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from dpvo.config import cfg
 from dpvo.dpvo import DPVO
 from dpvo.plot_utils import plot_trajectory, save_output_for_COLMAP, save_ply
-from dpvo.stream import image_stream, video_stream
+from dpvo.stream import image_stream, video_stream, StereoStream
 from dpvo.utils import Timer
 from dpvo import altcorr, fastba, lietorch
 
@@ -74,39 +74,40 @@ def show_image(image, t=0):
     cv2.waitKey(t)
 
 @torch.no_grad()
-def run(cfg, network, imagedir, calib, stride=1, skip=0, viz=False, timeit=False):
+def run(cfg, network, image_dirs, calib, stride=1, skip=0, viz=False, timeit=False):
 
     slam = None
-    queue = Queue(maxsize=8)
-
+    
     # We need the list of images 
-    images_list = sorted(glob.glob(os.path.join(imagedir, "*.png")))[::stride]
+    images_list = sorted(glob.glob(os.path.join(image_dirs[0], "*.png")))[::stride]
     timestamps  = [float(x.split('/')[-1][:-4]) for x in images_list]
 
-    if os.path.isdir(imagedir):
-        reader = Process(target=image_stream, args=(queue, imagedir, calib, stride, skip))
-    else:
-        reader = Process(target=video_stream, args=(queue, imagedir, calib, stride, skip))
-
-    reader.start()
+    stereo_stream = StereoStream(image_dirs, calib=calib, stride = stride)
+    stereo_reader = Process(target=stereo_stream.stream)
+    stereo_reader.start()
 
     livePlot = LiveTrajectory()
     while 1:
-        (t, image, intrinsics) = queue.get()
+        (t, image_p, intrinsics_p, image_s, intrinsics_s, extrinsics) = stereo_stream.queue.get()
         if t < 0: break
 
-        cv2.imshow("Frame", image)
+        # cv2.imshow("Frame", image)
+        cv2.imshow("Frame2", image_p)
         cv2.waitKey(10)
 
-        image = torch.from_numpy(image).permute(2,0,1).cuda()
-        intrinsics = torch.from_numpy(intrinsics).cuda()
+        image_p = torch.from_numpy(image_p).permute(2,0,1).cuda()
+        image_s = torch.from_numpy(image_s).permute(2,0,1).cuda()
+        images  = (image_p, image_s)
+        intrinsics_p = torch.from_numpy(intrinsics_p).cuda()
+        intrinsics_s = torch.from_numpy(intrinsics_s).cuda()
+        extrinsics   = extrinsics.cuda()
 
         if slam is None:
-            _, H, W = image.shape
+            _, H, W = image_p.shape
             slam = DPVO(cfg, network, ht=H, wd=W, viz=viz)
 
         with Timer("SLAM", enabled=timeit):
-            slam(t, image, intrinsics)
+            slam(t, images, intrinsics_p, intrinsics_s, extrinsics)
 
         # Get the estimated poses
         slam.traj = {}
@@ -128,20 +129,21 @@ def run(cfg, network, imagedir, calib, stride=1, skip=0, viz=False, timeit=False
             livePlot.getLivePlot(traj_est)
             # Path("saved_trajectories").mkdir(exist_ok=True)
             file_interface.write_tum_trajectory_file(f"estimated_trajectory.txt", traj_est)
-    reader.join()
+    stereo_reader.join()
 
     points = slam.pg.points_.cpu().numpy()[:slam.m]
     colors = slam.pg.colors_.view(-1, 3).cpu().numpy()[:slam.m]
 
-    return slam.terminate(), (points, colors, (*intrinsics, H, W))
+    return slam.terminate(), (points, colors, (*intrinsics_p, H, W))
 
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--network', type=str, default='dpvo.pth')
-    parser.add_argument('--imagedir', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
-    parser.add_argument('--calib', type=str, default='calib/euroc.txt')
+    parser.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
+    parser.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/')
+    parser.add_argument('--calib', type=str, default='calib/euroc.yaml')
     parser.add_argument('--name', type=str, help='name your run', default='result')
     parser.add_argument('--stride', type=int, default=2)
     parser.add_argument('--skip', type=int, default=0)
@@ -160,8 +162,8 @@ if __name__ == '__main__':
 
     print("Running with config...")
     print(cfg)
-
-    (poses, tstamps), (points, colors, calib) = run(cfg, args.network, args.imagedir, args.calib, args.stride, args.skip, args.viz, args.timeit)
+    img_dirs = (args.imagedir_p, args.imagedir_s)
+    (poses, tstamps), (points, colors, calib) = run(cfg, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
     trajectory = PoseTrajectory3D(positions_xyz=poses[:,:3], orientations_quat_wxyz=poses[:, [6, 3, 4, 5]], timestamps=tstamps)
 
     
