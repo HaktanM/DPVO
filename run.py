@@ -22,10 +22,12 @@ from dpvo.stream import image_stream, video_stream, StereoStream
 from dpvo.utils import Timer
 from dpvo import altcorr, fastba, lietorch
 
-from utils.DataReader import StereoReader
+from s_dpvo_utils.DataReader import StereoReader
 
 import glob
 import numpy as np
+
+from s_dpvo_utils.stereo_raft_bridge import StereoMatcher
 SKIP = 0
 
 
@@ -76,7 +78,7 @@ def show_image(image, t=0):
     cv2.waitKey(t)
 
 @torch.no_grad()
-def run(cfg, network, image_dirs, calib, stride=1, skip=0, viz=False, timeit=False):
+def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False, timeit=False):
 
     slam = None
     
@@ -85,21 +87,26 @@ def run(cfg, network, image_dirs, calib, stride=1, skip=0, viz=False, timeit=Fal
     timestamps  = [float(x.split('/')[-1][:-4]) for x in images_list]
 
     stereo_reader = StereoReader(image_dirs, calib=calib, stride = stride)
-
+    stereo_mathcer = StereoMatcher(args=args_sraft, DEVICE="cuda")
 
     livePlot = LiveTrajectory()
     for t, (image_p, image_s) in enumerate(stereo_reader):
 
-        # cv2.imshow("Frame", image)
+
+        disparity = stereo_mathcer.getDisparity(img1=image_p, img2=image_s)
+        warped    = stereo_mathcer.warp_image_with_stereo_flow()  
+
         cv2.imshow("image_p", image_p)
         cv2.imshow("image_s", image_s)
+        cv2.imshow("warped", warped)
+
         key = cv2.waitKey(10)
         if key == ord("q") or key == ord("Q"):
             break
         
         image_p = torch.from_numpy(image_p).permute(2,0,1).cuda()
         image_s = torch.from_numpy(image_s).permute(2,0,1).cuda()
-        images  = (image_p, image_s)
+        images  = (image_p, image_s, disparity)
 
         if slam is None:
             _, H, W = image_p.shape
@@ -156,13 +163,41 @@ if __name__ == '__main__':
     parser.add_argument('--save_trajectory', action="store_true")
     args = parser.parse_args()
 
+
+
+    parser_sraft = argparse.ArgumentParser()
+    parser_sraft.add_argument('--restore_ckpt', default='/home/haktanito/icra2026/RAFT-Stereo/models/raftstereo-eth3d.pth', help="restore checkpoint")
+    parser_sraft.add_argument('--save_numpy', action='store_true', help='save output as numpy arrays')
+    parser_sraft.add_argument('-l', '--left_imgs',  help="path to all first (left) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/*.png")
+    parser_sraft.add_argument('-r', '--right_imgs', help="path to all second (right) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/*.png")
+    parser_sraft.add_argument('--output_directory', help="directory to save output", default="demo_output")
+    parser_sraft.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    parser_sraft.add_argument('--valid_iters', type=int, default=32, help='number of flow-field updates during forward pass')
+    parser_sraft.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
+    parser_sraft.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/')
+    parser_sraft.add_argument('--calib', type=str, default='calib/euroc.yaml')
+
+    # Architecture choices
+    parser_sraft.add_argument('--hidden_dims', nargs='+', type=int, default=[128]*3, help="hidden state and context dimensions")
+    parser_sraft.add_argument('--corr_implementation', choices=["reg", "alt", "reg_cuda", "alt_cuda"], default="reg", help="correlation volume implementation")
+    parser_sraft.add_argument('--shared_backbone', action='store_true', help="use a single backbone for the context and feature encoders")
+    parser_sraft.add_argument('--corr_levels', type=int, default=4, help="number of levels in the correlation pyramid")
+    parser_sraft.add_argument('--corr_radius', type=int, default=4, help="width of the correlation pyramid")
+    parser_sraft.add_argument('--n_downsample', type=int, default=2, help="resolution of the disparity field (1/2^K)")
+    parser_sraft.add_argument('--context_norm', type=str, default="batch", choices=['group', 'batch', 'instance', 'none'], help="normalization of context encoder")
+    parser_sraft.add_argument('--slow_fast_gru', action='store_true', help="iterate the low-res GRUs more frequently")
+    parser_sraft.add_argument('--n_gru_layers', type=int, default=3, help="number of hidden GRU levels")
+    
+    args_sraft = parser_sraft.parse_args()
+
+
     cfg.merge_from_file(args.config)
     cfg.merge_from_list(args.opts)
 
     print("Running with config...")
     print(cfg)
     img_dirs = (args.imagedir_p, args.imagedir_s)
-    (poses, tstamps), (points, colors, calib) = run(cfg, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
+    (poses, tstamps), (points, colors, calib) = run(cfg, args_sraft, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
     trajectory = PoseTrajectory3D(positions_xyz=poses[:,:3], orientations_quat_wxyz=poses[:, [6, 3, 4, 5]], timestamps=tstamps)
 
     

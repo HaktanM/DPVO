@@ -3,6 +3,7 @@ import torch
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 
+
 from . import altcorr, fastba, lietorch
 from . import projective_ops as pops
 from .lietorch import SE3
@@ -16,6 +17,30 @@ mp.set_start_method('spawn', True)
 autocast = torch.cuda.amp.autocast
 Id = SE3.Identity(1, device="cuda")
 
+
+
+class Disparity:
+    def __init__(self, N, width, height, device="cuda"):
+        self.N      = N
+        self.width  = width
+        self.height = height
+        self.device = device
+
+        self.dis = torch.empty((0, self.height, self.width), dtype=torch.float32, device=self.device)
+        self.map = torch.empty((0,), dtype=torch.uint16, device=self.device)
+    
+    def add_disparity(self, i, disparity):
+        i  = torch.tensor(i, dtype=torch.uint16, device=self.device)
+
+        self.dis = torch.cat([self.dis, disparity.unsqueeze(0)], dim=0)
+        self.map = torch.cat([self.map, i.unsqueeze(0)], dim=0)
+
+    def delete_disparities(self, remove_i_values):
+        # remove_values = torch.tensor([3, 5, 7], device=self.device)
+        mask = ~torch.isin(self.map, remove_i_values)
+
+        self.disparities = self.disparities[mask]
+        self.map         = self.map[mask]
 
 class DPVO:
 
@@ -63,7 +88,9 @@ class DPVO:
         self.imap_ = torch.zeros(self.pmem, self.M, DIM, **kwargs)
         self.gmap_ = torch.zeros(self.pmem, self.M, 128, self.P, self.P, **kwargs)
 
-        self.pg = PatchGraph(self.cfg, self.P, self.DIM, self.pmem, **kwargs)
+        self.pg             = PatchGraph(self.cfg, self.P, self.DIM, self.pmem, **kwargs)
+
+        self.disparities    = Disparity(N=self.cfg.BUFFER_SIZE, width=self.wd, height=self.ht, device="cuda")
 
         # classic backend
         if self.cfg.CLASSIC_LOOP_CLOSURE:
@@ -293,12 +320,14 @@ class DPVO:
             self.pg.jj[self.pg.jj > k] -= 1
 
             for i in range(k, self.n-1):
-                self.pg.tstamps_[i] = self.pg.tstamps_[i+1]
-                self.pg.colors_[i] = self.pg.colors_[i+1]
-                self.pg.poses_[i] = self.pg.poses_[i+1]
-                self.pg.patches_[i] = self.pg.patches_[i+1]
-                self.pg.intrinsics_p_[i] = self.pg.intrinsics_p_[i+1]
-                self.pg.intrinsics_s_[i] = self.pg.intrinsics_s_[i+1]
+                self.pg.tstamps_[i]       = self.pg.tstamps_[i+1]
+                self.disparities.map[i]   = self.disparities.map[i+1]
+                self.disparities.dis[i]   = self.disparities.dis[i+1]
+                self.pg.colors_[i]        = self.pg.colors_[i+1]
+                self.pg.poses_[i]         = self.pg.poses_[i+1]
+                self.pg.patches_[i]       = self.pg.patches_[i+1]
+                self.pg.intrinsics_p_[i]  = self.pg.intrinsics_p_[i+1]
+                self.pg.intrinsics_s_[i]  = self.pg.intrinsics_s_[i+1]
 
                 self.imap_[i % self.pmem] = self.imap_[(i+1) % self.pmem]
                 self.gmap_[i % self.pmem] = self.gmap_[(i+1) % self.pmem]
@@ -391,8 +420,9 @@ class DPVO:
     def __call__(self, tstamp, images, intrinsics_p, intrinsics_s, extrinsics, right_frame=False):
         """ track new frame """
 
-        image_p = images[0]
-        image_s = images[1]
+        image_p   = images[0]
+        image_s   = images[1]
+        disparity = images[2]
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc(image_p, self.n)
@@ -418,7 +448,13 @@ class DPVO:
 
         ### update state attributes ###
         self.tlist.append(tstamp)
-        self.pg.tstamps_[self.n] = self.counter
+        self.pg.tstamps_[self.n]      = self.counter
+
+        ### Add Disparities
+        self.disparities.add_disparity(i=self.counter, disparity=disparity)
+
+        # Here, we need the stereo disparity
+        # self.disparities.map[self.n]  = self.counter
         self.pg.intrinsics_p_[self.n] = intrinsics_p / self.RES
         self.pg.intrinsics_s_[self.n] = intrinsics_s / self.RES
         self.pg.extrinsics_[self.n]   = extrinsics

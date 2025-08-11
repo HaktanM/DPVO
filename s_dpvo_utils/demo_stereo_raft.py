@@ -1,6 +1,6 @@
 import sys
-sys.path.append('RAFT-Stereo/core')
-sys.path.append('RAFT-Stereo')
+sys.path.append('/home/haktanito/icra2026/RAFT-Stereo/core')
+sys.path.append('/home/haktanito/icra2026/RAFT-Stereo')
 from raft_stereo import RAFTStereo
 from utils.utils import InputPadder
 
@@ -14,48 +14,12 @@ from pathlib import Path
 from PIL import Image
 from matplotlib import pyplot as plt
 import cv2
-import torch.nn.functional as F
 
 from s_dpvo_utils.DataReader import StereoReader
 
 DEVICE = 'cuda'
 
-def warp_image_with_stereo_flow(image, flow):
-    """
-    Warp an image using a predicted optical flow.
-    
-    Args:
-        image (torch.Tensor): Tensor of shape [C, H, W] in the same device as flow.
-        flow (torch.Tensor): Tensor of shape [2, H, W] containing (u, v) displacements.
-    
-    Returns:
-        torch.Tensor: Warped image of shape [C, H, W].
-    """
-    # Extract dimensions
-    _, _, H, W = image.shape
-    
-    # Create mesh grid of pixel coordinates
-    y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
-    x = x.to(flow.device)
-    y = y.to(flow.device)
-    
-    # Add flow to pixel coordinates
-    x_new = x + flow
-    y_new = y
-    
-    # Normalize coordinates to [-1, 1]
-    x_norm = 2 * (x_new / (W - 1)) - 1
-    y_norm = 2 * (y_new / (H - 1)) - 1
-    
-    # Stack and reshape for grid_sample
-    grid = torch.stack((x_norm, y_norm), dim=-1)  # [H, W, 2]
-    
-    # Warp the image
-    image_batch = image  # [1, C, H, W]
-    warped = F.grid_sample(image_batch, grid.unsqueeze(0), align_corners=True)
-    
-    return warped.squeeze(0)
-    
+
 def load_image(imfile):
     # img = np.array(Image.open(imfile)).astype(np.uint8)
     img = cv2.imread(imfile, cv2.IMREAD_COLOR_BGR).astype(np.uint8)
@@ -118,9 +82,9 @@ def demo(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--restore_ckpt', default='RAFT-Stereo/models/raftstereo-eth3d.pth', help="restore checkpoint")
+    parser.add_argument('--restore_ckpt', default='/home/haktanito/icra2026/RAFT-Stereo/models/raftstereo-eth3d.pth', help="restore checkpoint")
     parser.add_argument('--save_numpy', action='store_true', help='save output as numpy arrays')
-    parser.add_argument('-l', '--left_imgs', help="path to all first (left) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/*.png")
+    parser.add_argument('-l', '--left_imgs',  help="path to all first (left) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/*.png")
     parser.add_argument('-r', '--right_imgs', help="path to all second (right) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/*.png")
     parser.add_argument('--output_directory', help="directory to save output", default="demo_output")
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
