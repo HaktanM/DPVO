@@ -359,8 +359,13 @@ class DPVO:
                 else:
                     t0 = self.n - self.cfg.OPTIMIZATION_WINDOW if self.is_initialized else 1
                     t0 = max(t0, 1)
+                    # import time
+                    # start_t = time.monotonic_ns()
                     fastba.BA(self.poses, self.patches, self.intrinsics_p, self.intrinsics_s, self.extrinsics, 
                         target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
+                    # stop_t  = time.monotonic_ns()
+                    # elapsed_time = (stop_t - start_t) * (1e-6)
+                    # print(f"Elapsed time : {elapsed_time} ms") 
             except:
                 print("Warning BA failed...")
 

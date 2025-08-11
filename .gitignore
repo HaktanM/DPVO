@@ -8,6 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
+RAFT-Stereo/
 build/
 develop-eggs/
 dist/

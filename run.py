@@ -22,6 +22,8 @@ from dpvo.stream import image_stream, video_stream, StereoStream
 from dpvo.utils import Timer
 from dpvo import altcorr, fastba, lietorch
 
+from utils.DataReader import StereoReader
+
 import glob
 import numpy as np
 SKIP = 0
@@ -82,32 +84,29 @@ def run(cfg, network, image_dirs, calib, stride=1, skip=0, viz=False, timeit=Fal
     images_list = sorted(glob.glob(os.path.join(image_dirs[0], "*.png")))[::stride]
     timestamps  = [float(x.split('/')[-1][:-4]) for x in images_list]
 
-    stereo_stream = StereoStream(image_dirs, calib=calib, stride = stride)
-    stereo_reader = Process(target=stereo_stream.stream)
-    stereo_reader.start()
+    stereo_reader = StereoReader(image_dirs, calib=calib, stride = stride)
+
 
     livePlot = LiveTrajectory()
-    while 1:
-        (t, image_p, intrinsics_p, image_s, intrinsics_s, extrinsics) = stereo_stream.queue.get()
-        if t < 0: break
+    for t, (image_p, image_s) in enumerate(stereo_reader):
 
         # cv2.imshow("Frame", image)
-        cv2.imshow("Frame2", image_p)
-        cv2.waitKey(10)
-
+        cv2.imshow("image_p", image_p)
+        cv2.imshow("image_s", image_s)
+        key = cv2.waitKey(10)
+        if key == ord("q") or key == ord("Q"):
+            break
+        
         image_p = torch.from_numpy(image_p).permute(2,0,1).cuda()
         image_s = torch.from_numpy(image_s).permute(2,0,1).cuda()
         images  = (image_p, image_s)
-        intrinsics_p = torch.from_numpy(intrinsics_p).cuda()
-        intrinsics_s = torch.from_numpy(intrinsics_s).cuda()
-        extrinsics   = extrinsics.cuda()
 
         if slam is None:
             _, H, W = image_p.shape
             slam = DPVO(cfg, network, ht=H, wd=W, viz=viz)
 
         with Timer("SLAM", enabled=timeit):
-            slam(t, images, intrinsics_p, intrinsics_s, extrinsics)
+            slam(t, images, stereo_reader.intrinsics_rp, stereo_reader.intrinsics_rs, stereo_reader.extrinsics)
 
         # Get the estimated poses
         slam.traj = {}
@@ -143,7 +142,7 @@ if __name__ == '__main__':
     parser.add_argument('--network', type=str, default='dpvo.pth')
     parser.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
     parser.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/')
-    parser.add_argument('--calib', type=str, default='calib/euroc.yaml')
+    parser.add_argument('--calib', type=str, default='/home/haktanito/icra2026/DPVO/calib/euroc.yaml')
     parser.add_argument('--name', type=str, help='name your run', default='result')
     parser.add_argument('--stride', type=int, default=2)
     parser.add_argument('--skip', type=int, default=0)
