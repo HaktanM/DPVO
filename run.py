@@ -93,14 +93,36 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
     for t, (image_p, image_s) in enumerate(stereo_reader):
 
 
-        disparity = stereo_mathcer.getDisparity(img1=image_p, img2=image_s)
-        warped    = stereo_mathcer.warp_image_with_stereo_flow()  
+        disparity             = stereo_mathcer.getDisparity(img1=image_p, img2=image_s)
+        warped1, valid_mask   = stereo_mathcer.warp_image1_with_stereo_flow()  
+
+
+
+        # Convert to NumPy array
+        disp = disparity.cpu().numpy()
+        disp = np.squeeze(disp)
+
+        # Optional: normalize to 0–255 for display
+        disp_norm = cv2.normalize(disp, None, 0, 255, cv2.NORM_MINMAX)
+        disp_norm = np.uint8(disp_norm)
+
+        disp_color = cv2.applyColorMap(disp_norm, cv2.COLORMAP_JET)
+
+        # Blend images
+        alpha = 0.6  # weight for original
+        beta = 1 - alpha  # weight for disparity
+        overlay_p = cv2.addWeighted(image_p, alpha, disp_color, beta, 0)
 
         cv2.imshow("image_p", image_p)
         cv2.imshow("image_s", image_s)
-        cv2.imshow("warped", warped)
+        cv2.imshow("warped1", warped1)
+        cv2.imshow("overlay_p", overlay_p)
 
-        key = cv2.waitKey(10)
+        valid_mask = valid_mask[:, :, None]  # shape becomes (H, W, 1)
+        error = np.abs(warped1.astype(np.float32) - image_s.astype(np.float32)).astype(np.uint8) * valid_mask
+        cv2.imshow("error", error)
+ 
+        key = cv2.waitKey(1)
         if key == ord("q") or key == ord("Q"):
             break
         
@@ -140,7 +162,7 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
     points = slam.pg.points_.cpu().numpy()[:slam.m]
     colors = slam.pg.colors_.view(-1, 3).cpu().numpy()[:slam.m]
 
-    return slam.terminate(), (points, colors, (*intrinsics_p, H, W))
+    return slam.terminate(), (points, colors)
 
 
 if __name__ == '__main__':
@@ -206,7 +228,7 @@ if __name__ == '__main__':
         save_ply(args.name, points, colors)
 
     if args.save_colmap:
-        save_output_for_COLMAP(args.name, trajectory, points, colors, *calib)
+        save_output_for_COLMAP(args.name, trajectory, points, colors)
 
     if args.save_trajectory:
         Path("saved_trajectories").mkdir(exist_ok=True)

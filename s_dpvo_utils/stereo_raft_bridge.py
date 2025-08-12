@@ -39,7 +39,7 @@ class StereoMatcher:
         return img[None].to(self.DEVICE)
     
 
-    def warp_image_with_stereo_flow(self):
+    def warp_image1_with_stereo_flow(self):
         """
         Warp an image using a predicted optical flow.
         
@@ -59,7 +59,7 @@ class StereoMatcher:
         y = y.to(self.disparity.device)
         
         # Add flow to pixel coordinates
-        x_new = x + self.disparity
+        x_new = x - self.disparity
         y_new = y
         
         # Normalize coordinates to [-1, 1]
@@ -71,6 +71,55 @@ class StereoMatcher:
         
         # Warp the image
         image_batch = self.img1  # [1, C, H, W]
+        warped = F.grid_sample(image_batch, grid.unsqueeze(0), align_corners=True)
+        warped = warped.squeeze(0)
+        warped = warped.permute(1, 2, 0).cpu().numpy().astype(np.uint8)
+
+        # -------------------------
+        # Create validity mask
+        # -------------------------
+        mask_ones = torch.ones((1, 1, H, W), device=self.disparity.device)
+        mask_warped = F.grid_sample(mask_ones, grid.unsqueeze(0), align_corners=True)
+
+        # Convert mask to binary (valid=1, invalid=0)
+        valid_mask = (mask_warped > 0.999).squeeze().cpu().numpy().astype(np.uint8)  # [H, W]
+
+        
+        return warped, valid_mask
+    
+
+    def warp_image2_with_stereo_flow(self):
+        """
+        Warp an image using a predicted optical flow.
+        
+        Args:
+            image (torch.Tensor): Tensor of shape [C, H, W] in the same device as flow.
+            flow (torch.Tensor): Tensor of shape [2, H, W] containing (u, v) displacements.
+        
+        Returns:
+            torch.Tensor: Warped image of shape [C, H, W].
+        """
+        # Extract dimensions
+        _, _, H, W = self.img2.shape
+        
+        # Create mesh grid of pixel coordinates
+        y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
+        x = x.to(self.disparity.device)
+        y = y.to(self.disparity.device)
+        
+        # Add flow to pixel coordinates
+        x_new = x + self.disparity
+        y_new = y
+        
+        # Normalize coordinates to [-1, 1]
+        x_norm = 2 * (x_new / (W - 1)) - 1
+        y_norm = 2 * (y_new / (H - 1)) - 1
+        
+        # Stack and reshape for grid_sample
+        grid = torch.stack((x_norm, y_norm), dim=-1)  # [H, W, 2]
+        
+        # Warp the image
+        image_batch = self.img2  # [1, C, H, W]
         warped = F.grid_sample(image_batch, grid.unsqueeze(0), align_corners=True)
         warped = warped.squeeze(0)
         warped = warped.permute(1, 2, 0).cpu().numpy().astype(np.uint8)

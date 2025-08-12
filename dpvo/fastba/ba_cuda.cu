@@ -452,6 +452,7 @@ std::vector<torch::Tensor> cuda_ba(
     torch::Tensor intrinsics_s,
     torch::Tensor extrinsics,
     torch::Tensor target,
+    torch::Tensor disparity,
     torch::Tensor weight,
     torch::Tensor lmbda,
     torch::Tensor ii,
@@ -460,6 +461,16 @@ std::vector<torch::Tensor> cuda_ba(
     const int PPF,
     const int t0, const int t1, const int iterations, bool eff_impl)
 {
+  ;
+  // torch::Tensor extrinsics_cpu = extrinsics.cpu();
+  // std::cout << "Extrinsics tensor (from CUDA):" << std::endl;
+  // std::cout << extrinsics_cpu << std::endl;
+
+  torch::Tensor disparity_cpu = disparity.cpu();
+  std::cout << "Shape: " << disparity_cpu.sizes() << std::endl;
+  // auto slice = disparity_cpu.index({0, 0, torch::indexing::Slice(0, 5), torch::indexing::Slice(0, 5)});
+  // std::cout << slice << std::endl;
+
   auto ktuple = torch::_unique(kk, true, true);
   torch::Tensor kx = std::get<0>(ktuple);
   torch::Tensor ku = std::get<1>(ktuple);

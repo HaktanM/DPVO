@@ -153,6 +153,10 @@ class DPVO:
     @property
     def poses(self):
         return self.pg.poses_.view(1, self.N, 7)
+    
+    @property
+    def disparity(self):
+        return self.disparities.dis.view(self.counter, self.ht, self.wd)
 
     @property
     def patches(self):
@@ -391,7 +395,7 @@ class DPVO:
                     # import time
                     # start_t = time.monotonic_ns()
                     fastba.BA(self.poses, self.patches, self.intrinsics_p, self.intrinsics_s, self.extrinsics, 
-                        target, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
+                        target, self.disparity, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
                     # stop_t  = time.monotonic_ns()
                     # elapsed_time = (stop_t - start_t) * (1e-6)
                     # print(f"Elapsed time : {elapsed_time} ms") 
@@ -440,11 +444,11 @@ class DPVO:
                     centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
                     return_color=True)
             
-            fmap_s, gmap_s, imap_s, patches_s, __s, clr_s = \
-                self.network.patchify(image_s,
-                    patches_per_image=self.cfg.PATCHES_PER_FRAME, 
-                    centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
-                    return_color=True)
+            # fmap_s, gmap_s, imap_s, patches_s, __s, clr_s = \
+            #     self.network.patchify(image_s,
+            #         patches_per_image=self.cfg.PATCHES_PER_FRAME, 
+            #         centroid_sel_strat=self.cfg.CENTROID_SEL_STRAT, 
+            #         return_color=True)
 
         ### update state attributes ###
         self.tlist.append(tstamp)
@@ -452,6 +456,7 @@ class DPVO:
 
         ### Add Disparities
         self.disparities.add_disparity(i=self.counter, disparity=disparity)
+        print(self.disparities.dis.shape)
 
         # Here, we need the stereo disparity
         # self.disparities.map[self.n]  = self.counter
