@@ -134,6 +134,7 @@ class StereoReader:
 
         # Load the extrinsic calibration:
         # Rigid transformation from primary camera frame to secondary camera frame
+        # self.T_p_to_s = np.linalg.inv(np.array(self.calib['T_cam0_to_cam1']).reshape(4,4))
         self.T_p_to_s = np.array(self.calib['T_cam0_to_cam1']).reshape(4,4)
 
         # Collect images
@@ -185,8 +186,10 @@ class StereoReader:
 
         self.R_p_to_s   = self.T_p_to_s[:3, :3]
         self.R_rp_to_rs = self.R_s_rs @ self.R_p_to_s @ self.R_p_to_rp.transpose()
-        self.q_rp_to_rs = pp.from_matrix(torch.from_numpy(self.R_rp_to_rs), ltype=pp.SO3_type, check=False).data.to(torch.float32)
-        self.t_rp_in_rs = torch.from_numpy(self.T_p_to_s[:3, 3]).to(torch.float32)
+        self.q_rp_to_rs = pp.from_matrix(torch.from_numpy(self.R_rp_to_rs.T), ltype=pp.SO3_type, check=False).data.to(torch.float32)
+
+        t_rp_in_rs      = -(self.R_rp_to_rs.T @ self.T_p_to_s[:3, 3].reshape(3,1)).reshape(-1)
+        self.t_rp_in_rs = torch.from_numpy(t_rp_in_rs).to(torch.float32)
         self.rp_to_rs   = torch.cat([self.t_rp_in_rs, self.q_rp_to_rs], dim=0).unsqueeze(0)  # shape (1,7)
 
         intrinsics_rp = np.array([self.K_rp[0,0], self.K_rp[1,1], self.K_rp[0,2], self.K_rp[1,2]])

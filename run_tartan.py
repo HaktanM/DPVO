@@ -59,7 +59,7 @@ class LiveTrajectory():
             est_name="traj",
             pose_relation=PoseRelation.translation_part,
             align=True,
-            correct_scale=False,
+            correct_scale=True,
         )
 
         transformation_matrix = result.np_arrays['alignment_transformation_sim3']

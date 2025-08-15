@@ -129,6 +129,7 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
         if key == ord("q") or key == ord("Q"):
             break
         
+        
         image_p = torch.from_numpy(image_p).permute(2,0,1).cuda()
         image_s = torch.from_numpy(image_s).permute(2,0,1).cuda()
         images  = (image_p, image_s, disparity)
@@ -190,7 +191,7 @@ if __name__ == '__main__':
 
 
     parser_sraft = argparse.ArgumentParser()
-    parser_sraft.add_argument('--restore_ckpt', default='/home/haktanito/icra2026/RAFT-Stereo/models/raftstereo-sceneflow.pth', help="restore checkpoint")
+    parser_sraft.add_argument('--restore_ckpt', default='/home/haktanito/icra2026/RAFT-Stereo/models/raftstereo-eth3d.pth', help="restore checkpoint")
     parser_sraft.add_argument('--save_numpy', action='store_true', help='save output as numpy arrays')
     parser_sraft.add_argument('-l', '--left_imgs',  help="path to all first (left) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/*.png")
     parser_sraft.add_argument('-r', '--right_imgs', help="path to all second (right) frames", default="/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/*.png")
@@ -221,7 +222,7 @@ if __name__ == '__main__':
     print("Running with config...")
     print(cfg)
     img_dirs = (args.imagedir_p, args.imagedir_s)
-    (poses, tstamps), (points, colors, calib) = run(cfg, args_sraft, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
+    (poses, tstamps), (points, colors) = run(cfg, args_sraft, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
     trajectory = PoseTrajectory3D(positions_xyz=poses[:,:3], orientations_quat_wxyz=poses[:, [6, 3, 4, 5]], timestamps=tstamps)
 
     

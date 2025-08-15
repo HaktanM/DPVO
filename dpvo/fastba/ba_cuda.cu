@@ -405,7 +405,7 @@ __global__ void reprojection_residuals_and_hessian(
       int py_p = static_cast<int>(target[n][1]);
 
       // If the tracked feature is inside the image
-      if((0<px_p)&&(px_p<120)&&(0<py_p)&&(py_p<120)){
+      if((0<px_p)&&(px_p<188)&&(0<py_p)&&(py_p<120)){
         float disp = disparity[jx+t0][py_p][px_p];
 
         float Xj_s[4]; 
@@ -435,7 +435,7 @@ __global__ void reprojection_residuals_and_hessian(
 
           float *Jj, Ji[6], Jz, r, w;
           
-          float mask2 = 0.01;
+          float mask2 = 0.8;
           if (abs(disp)<2.0) mask2 = 0.0;
           r = rx_s;
           w = mask2 * mask * weight[n][0];
@@ -445,20 +445,37 @@ __global__ void reprojection_residuals_and_hessian(
 
           Jz = fx_s * (tij_s[0] * d_s - tij_s[2] * (X_s * d2_s));
           Jj = (float[6]){fx_s*W_s*d_s, 0, fx_s*-X_s*W_s*d2_s, fx_s*-X_s*Y_s*d2_s, fx_s*(1+X_s*X_s*d2_s), fx_s*-Y_s*d_s};
+
+          adjSE3(tij_s, qij_s, Jj, Ji);
     
           for (int i=0; i<6; i++) {
             for (int j=0; j<6; j++) {
+              if (ix >= 0)
+                atomicAdd(&B[6*ix+i][6*ix+j],  w * Ji[i] * Ji[j]);
               if (jx >= 0)
                 atomicAdd(&B[6*jx+i][6*jx+j],  w * Jj[i] * Jj[j]);
+              if (ix >= 0 && jx >= 0) {
+                atomicAdd(&B[6*ix+i][6*jx+j], -w * Ji[i] * Jj[j]);
+                atomicAdd(&B[6*jx+i][6*ix+j], -w * Jj[i] * Ji[j]);
+              }
             }
           }
     
           for (int i=0; i<6; i++) {
-            if (jx >= 0)
-              atomicAdd(&E[6*jx+i][k],  w * Jz * Jj[i]);
+            if (eff_impl){
+              atomicAdd(&E_lookup[ijs][kx % ppf][i],  -w * Jz * Ji[i]);
+              atomicAdd(&E_lookup[ijx][kx % ppf][i],  w * Jz * Jj[i]);
+            } else {
+              if (ix >= 0)
+                atomicAdd(&E[6*ix+i][k], -w * Jz * Ji[i]);
+              if (jx >= 0)
+                atomicAdd(&E[6*jx+i][k],  w * Jz * Jj[i]);
+            }
           }
     
           for (int i=0; i<6; i++) {
+            if (ix >= 0)
+              atomicAdd(&v[6*ix+i], -w * r * Ji[i]);
             if (jx >= 0)
               atomicAdd(&v[6*jx+i],  w * r * Jj[i]);
           }
