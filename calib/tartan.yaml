@@ -1,0 +1,17 @@
+cam0:
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radial-tangential
+  intrinsics: [320.0, 320.0, 320.0, 240.0] #fu, fv, cu, cv
+  resolution: [640, 480]
+cam1:
+  camera_model: pinhole
+  distortion_coeffs: [0.0, 0.0, 0.0, 0.0]
+  distortion_model: radial-tangential
+  intrinsics: [320.0, 320.0, 320.0, 240.0] #fu, fv, cu, cv
+  resolution: [640, 480]
+T_cam0_to_cam1:
+  - [1.0, 0.0, 0.0, 0.25]
+  - [0.0, 1.0, 0.0, 0.0]
+  - [0.0, 0.0, 1.0, 0.0]
+  - [0.0, 0.0, 0.0, 1.0]

@@ -1,24 +1,19 @@
-import cv2
-from s_dpvo_utils.DataReader import StereoReader
+import torch
+import time
 
-if __name__ == '__main__':
-    import argparse
-    parser = argparse.ArgumentParser()
 
-    parser.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
-    parser.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/')
-    parser.add_argument('--calib', type=str, default='/home/haktanito/icra2026/DPVO/calib/euroc.yaml')
-    args = parser.parse_args()
+M = torch.rand(4096, 2**15).cuda()
+v = torch.rand(1, 4096).cuda()
 
-    image_dirs = (args.imagedir_p, args.imagedir_s)
+torch.cuda.synchronize()
+t_start = time.monotonic_ns()
+result  = torch.matmul(v,M).view(-1)
+result  = torch.topk(result, 4)
+print(result)
+torch.cuda.synchronize()
+t_stop  = time.monotonic_ns()
 
-    stereo_reader = StereoReader(image_dirs, calib=args.calib, stride = 1)
-    
-    
-    for item in stereo_reader:
-        img1_rect, img2_rect = item
-        cv2.imshow("img1_rect", img1_rect)
-        cv2.imshow("img2_rect", img2_rect)
-        key = cv2.waitKey()
-        if key == ord("q"):
-            break
+elapsed_time = t_stop - t_start
+
+
+print(elapsed_time*(1e-6))

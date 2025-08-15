@@ -249,8 +249,11 @@ __global__ void patch_retr_kernel(
 __global__ void reprojection_residuals_and_hessian(
     const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> poses,
     const torch::PackedTensorAccessor32<float,4,torch::RestrictPtrTraits> patches,
-    const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> intrinsics,
+    const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> intrinsics_p,
+    const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> intrinsics_s,
+    const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> extrinsics,
     const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> target,
+    const torch::PackedTensorAccessor32<float,3,torch::RestrictPtrTraits> disparity,
     const torch::PackedTensorAccessor32<float,2,torch::RestrictPtrTraits> weight,
     const torch::PackedTensorAccessor32<float,1,torch::RestrictPtrTraits> lmbda,
     const torch::PackedTensorAccessor32<long,2,torch::RestrictPtrTraits> ij_xself,
@@ -267,12 +270,17 @@ __global__ void reprojection_residuals_and_hessian(
     torch::PackedTensorAccessor32<mtype,1,torch::RestrictPtrTraits> u, const int t0, const int ppf)
 {
 
-  __shared__ float fx, fy, cx, cy;
+  __shared__ float fx_p, fy_p, cx_p, cy_p, fx_s, fy_s, cx_s, cy_s;
   if (threadIdx.x == 0) {
-    fx = intrinsics[0][0];
-    fy = intrinsics[0][1];
-    cx = intrinsics[0][2];
-    cy = intrinsics[0][3];
+    fx_p = intrinsics_p[0][0];
+    fy_p = intrinsics_p[0][1];
+    cx_p = intrinsics_p[0][2];
+    cy_p = intrinsics_p[0][3];
+
+    fx_s = intrinsics_s[0][0];
+    fy_s = intrinsics_s[0][1];
+    cx_s = intrinsics_s[0][2];
+    cy_s = intrinsics_s[0][3];
   }
 
   bool eff_impl = (ppf > 0);
@@ -296,8 +304,8 @@ __global__ void reprojection_residuals_and_hessian(
     float qj[4] = { poses[jx][3], poses[jx][4], poses[jx][5], poses[jx][6] };
 
     float Xi[4], Xj[4];
-    Xi[0] = (patches[kx][0][1][1] - cx) / fx;
-    Xi[1] = (patches[kx][1][1][1] - cy) / fy;
+    Xi[0] = (patches[kx][0][1][1] - cx_p) / fx_p;
+    Xi[1] = (patches[kx][1][1][1] - cy_p) / fy_p;
     Xi[2] = 1.0;
     Xi[3] = patches[kx][2][1][1];
     
@@ -313,14 +321,14 @@ __global__ void reprojection_residuals_and_hessian(
     const float d = (Z >= 0.2) ? 1.0 / Z : 0.0; 
     const float d2 = d * d;
 
-    const float x1 = fx * (X / Z) + cx;
-    const float y1 = fy * (Y / Z) + cy;
+    const float x1 = fx_p * (X / Z) + cx_p;
+    const float y1 = fy_p * (Y / Z) + cy_p;
 
     const float rx = target[n][0] - x1;
     const float ry = target[n][1] - y1;
 
     const bool in_bounds = (sqrt(rx*rx + ry*ry) < 128) && (Z > 0.2) &&
-      (x1 > -64) && (y1 > -64) && (x1 < 2*cx + 64) && (y1 < 2*cy + 64);
+      (x1 > -64) && (y1 > -64) && (x1 < 2*cx_p + 64) && (y1 < 2*cy_p + 64);
 
     const float mask = in_bounds ? 1.0 : 0.0;
 
@@ -336,16 +344,16 @@ __global__ void reprojection_residuals_and_hessian(
         r = target[n][0] - x1;
         w = mask * weight[n][0];
 
-        Jz = fx * (tij[0] * d - tij[2] * (X * d2));
-        Jj = (float[6]){fx*W*d, 0, fx*-X*W*d2, fx*-X*Y*d2, fx*(1+X*X*d2), fx*-Y*d};
+        Jz = fx_p * (tij[0] * d - tij[2] * (X * d2));
+        Jj = (float[6]){fx_p*W*d, 0, fx_p*-X*W*d2, fx_p*-X*Y*d2, fx_p*(1+X*X*d2), fx_p*-Y*d};
 
       } else {
 
         r = target[n][1] - y1;
         w = mask * weight[n][1];
 
-        Jz = fy * (tij[1] * d - tij[2] * (Y * d2));
-        Jj = (float[6]){0, fy*W*d, fy*-Y*W*d2, fy*(-1-Y*Y*d2), fy*(X*Y*d2), fy*X*d};
+        Jz = fy_p * (tij[1] * d - tij[2] * (Y * d2));
+        Jj = (float[6]){0, fy_p*W*d, fy_p*-Y*W*d2, fy_p*(-1-Y*Y*d2), fy_p*(X*Y*d2), fy_p*X*d};
 
       }
 
@@ -388,6 +396,82 @@ __global__ void reprojection_residuals_and_hessian(
 
       atomicAdd(&C[k], w * Jz * Jz);
       atomicAdd(&u[k], w *  r * Jz);
+    }
+
+    // If available, integrate the stereo measurements
+    if(true){
+      // First get the image coordinates of the patch
+      int px_p = static_cast<int>(target[n][0]);
+      int py_p = static_cast<int>(target[n][1]);
+
+      // If the tracked feature is inside the image
+      if((0<px_p)&&(px_p<120)&&(0<py_p)&&(py_p<120)){
+        float disp = disparity[jx+t0][py_p][px_p];
+
+        float Xj_s[4]; 
+        float tps[3] = { extrinsics[0][0], extrinsics[0][1], extrinsics[0][2] };                    // t primary to secondary
+        float tij_s[4] = { tij[0]+tps[0], tij[1]+tps[1], tij[2]+tps[2] };  // q primary to secondary
+        float qij_s[4] = { qij[0], qij[1], qij[2], qij[3] };  // q primary to secondary
+
+
+        actSE3(tij_s, qij_s, Xi, Xj_s);
+
+        const float X_s = Xj_s[0];
+        const float Y_s = Xj_s[1];
+        const float Z_s = Xj_s[2];
+        const float W_s = Xj_s[3];
+
+        const float d_s = (Z_s >= 0.2) ? 1.0 / Z_s : 0.0; 
+        const float d2_s = d_s * d_s;
+
+        const float x1_s = fx_s * (X_s / Z_s) + cx_s;
+        const float y1_s = fy_s * (Y_s / Z_s) + cy_s;
+
+        const float rx_s = target[n][0] - disp - x1_s;
+
+
+        // Now we are ready to compute the Jacobians for the stereo pair
+        for (int row=0; row<1; row++) {
+
+          float *Jj, Ji[6], Jz, r, w;
+          
+          float mask2 = 0.01;
+          if (abs(disp)<2.0) mask2 = 0.0;
+          r = rx_s;
+          w = mask2 * mask * weight[n][0];
+          
+          // Jz = fx_p * (tij[0] * d - tij[2] * (X * d2));
+          // Jj = (float[6]){fx_p*W*d, 0, fx_p*-X*W*d2, fx_p*-X*Y*d2, fx_p*(1+X*X*d2), fx_p*-Y*d};
+
+          Jz = fx_s * (tij_s[0] * d_s - tij_s[2] * (X_s * d2_s));
+          Jj = (float[6]){fx_s*W_s*d_s, 0, fx_s*-X_s*W_s*d2_s, fx_s*-X_s*Y_s*d2_s, fx_s*(1+X_s*X_s*d2_s), fx_s*-Y_s*d_s};
+    
+          for (int i=0; i<6; i++) {
+            for (int j=0; j<6; j++) {
+              if (jx >= 0)
+                atomicAdd(&B[6*jx+i][6*jx+j],  w * Jj[i] * Jj[j]);
+            }
+          }
+    
+          for (int i=0; i<6; i++) {
+            if (jx >= 0)
+              atomicAdd(&E[6*jx+i][k],  w * Jz * Jj[i]);
+          }
+    
+          for (int i=0; i<6; i++) {
+            if (jx >= 0)
+              atomicAdd(&v[6*jx+i],  w * r * Jj[i]);
+          }
+    
+          atomicAdd(&C[k], w * Jz * Jz);
+          atomicAdd(&u[k], w *  r * Jz);
+        }
+        // printf("px_p:%d, py_p:%d \n", px_p, py_p); 
+      }
+      // else{
+      //   printf("px_p:%d, py_p:%d \n", px_p, py_p);
+      // }
+      
     }
   }
 }
@@ -461,13 +545,23 @@ std::vector<torch::Tensor> cuda_ba(
     const int PPF,
     const int t0, const int t1, const int iterations, bool eff_impl)
 {
-  ;
+  
   // torch::Tensor extrinsics_cpu = extrinsics.cpu();
   // std::cout << "Extrinsics tensor (from CUDA):" << std::endl;
-  // std::cout << extrinsics_cpu << std::endl;
+  // auto slice = extrinsics_cpu.index({0, 0, torch::indexing::Slice(0, 7)});
+  // std::cout << slice << std::endl;
+  
+  
+  // torch::Tensor intrinsics_p_cpu = intrinsics_p.cpu();
+  // auto slice = intrinsics_p_cpu.index({0, 0, torch::indexing::Slice(0, 4)});
+  // std::cout << slice << std::endl;
 
-  torch::Tensor disparity_cpu = disparity.cpu();
-  std::cout << "Shape: " << disparity_cpu.sizes() << std::endl;
+  // torch::Tensor intrinsics_s_cpu = intrinsics_s.cpu();
+  // slice = intrinsics_s_cpu.index({0, 0, torch::indexing::Slice(0, 4)});
+  // std::cout << slice << std::endl;
+
+  // torch::Tensor disparity_cpu = disparity.cpu();
+  // std::cout << "Shape: " << disparity_cpu.sizes() << std::endl;
   // auto slice = disparity_cpu.index({0, 0, torch::indexing::Slice(0, 5), torch::indexing::Slice(0, 5)});
   // std::cout << slice << std::endl;
 
@@ -485,6 +579,12 @@ std::vector<torch::Tensor> cuda_ba(
   poses = poses.view({-1, 7});
   patches = patches.view({-1,3,P,P});
   intrinsics_p = intrinsics_p.view({-1, 4});
+  intrinsics_s = intrinsics_s.view({-1, 4});
+  extrinsics   = extrinsics.view({-1, 7});
+
+  long heigth = disparity.size(1);
+  long width  = disparity.size(2);
+  disparity    = disparity.view({-1, heigth, width});
 
   target = target.view({-1, 2});
   weight = weight.view({-1, 2});
@@ -523,7 +623,10 @@ std::vector<torch::Tensor> cuda_ba(
       poses.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       patches.packed_accessor32<float,4,torch::RestrictPtrTraits>(),
       intrinsics_p.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
+      intrinsics_s.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
+      extrinsics.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       target.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
+      disparity.packed_accessor32<float,3,torch::RestrictPtrTraits>(),
       weight.packed_accessor32<float,2,torch::RestrictPtrTraits>(),
       lmbda.packed_accessor32<float,1,torch::RestrictPtrTraits>(),
       blockE->ij_xself.packed_accessor32<long,2,torch::RestrictPtrTraits>(),
@@ -562,7 +665,7 @@ std::vector<torch::Tensor> cuda_ba(
       torch::Tensor dX, dZ, Qt = torch::transpose(Q, 0, 1);
       torch::Tensor I = torch::eye(6*N, mdtype);
 
-      if (eff_impl) {
+      if (false) {
 
         torch::Tensor EQEt = blockE->computeEQEt(N, Q);
         torch::Tensor EQu = blockE->computeEv(N, Qt * u);
@@ -577,10 +680,8 @@ std::vector<torch::Tensor> cuda_ba(
         dZ = Qt * (u - EtdX);
 
       } else {
-
         torch::Tensor EQ = E * Q;
         torch::Tensor Et = torch::transpose(E, 0, 1);
-
         torch::Tensor S = B - torch::matmul(EQ, Et);
         torch::Tensor y = v - torch::matmul(EQ,  u);
 
@@ -588,7 +689,6 @@ std::vector<torch::Tensor> cuda_ba(
         torch::Tensor U = std::get<0>(at::linalg_cholesky_ex(S));
         dX = torch::cholesky_solve(y, U);
         dZ = Qt * (u - torch::matmul(Et, dX));
-
       }
 
       dX = dX.view({N, 6});

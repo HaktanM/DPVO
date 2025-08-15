@@ -22,7 +22,7 @@ from dpvo.stream import image_stream, video_stream, StereoStream
 from dpvo.utils import Timer
 from dpvo import altcorr, fastba, lietorch
 
-from s_dpvo_utils.DataReader import StereoReader
+from s_dpvo_utils.DataReader import StereoReader_tartan
 
 import glob
 import numpy as np
@@ -32,14 +32,14 @@ SKIP = 0
 
 
 class LiveTrajectory():
-    def __init__(self, ref_path = "/home/haktanito/icra2026/datasets/MH_01_easy/mav0/state_groundtruth_estimate0/data.csv"):
+    def __init__(self, ref_path = "/home/haktanito/icra2026/datasets/abandonedfactory_sample_P001/P001/pose_left.txt"):
         # Read the GROUNDTRUTH
         self.ref_path = ref_path
-        self.ref_data = np.loadtxt(self.ref_path, delimiter=",", comments="#")
+        self.ref_data = np.loadtxt(self.ref_path, delimiter=" ", comments="#")
         self.traj_ref = PoseTrajectory3D(
-            positions_xyz=self.ref_data[:,1:4],
-            orientations_quat_wxyz=self.ref_data[:, 4:8],
-            timestamps=np.array(self.ref_data[:, 0])
+            positions_xyz=self.ref_data[:,0:3],
+            orientations_quat_wxyz=self.ref_data[:, 3:7],
+            timestamps=np.arange(1, len(self.ref_data) + 1).astype(np.float32)
         )
 
         self.scale = 1.0
@@ -51,7 +51,7 @@ class LiveTrajectory():
         self.ax = plot.prepare_axis(self.fig, self.plot_mode)
 
     def getLivePlot(self, traj_est):
-        traj_ref_sync, traj_est_sync = sync.associate_trajectories(self.traj_ref, traj_est)
+        traj_ref_sync, traj_est_sync = sync.associate_trajectories(self.traj_ref, traj_est, max_diff=1.5)
 
         # Compute APE
         result = main_ape.ape(
@@ -59,7 +59,7 @@ class LiveTrajectory():
             est_name="traj",
             pose_relation=PoseRelation.translation_part,
             align=True,
-            correct_scale=True
+            correct_scale=False,
         )
 
         transformation_matrix = result.np_arrays['alignment_transformation_sim3']
@@ -88,15 +88,11 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
 
     slam = None
     
-    # We need the list of images 
-    images_list = sorted(glob.glob(os.path.join(image_dirs[0], "*.png")))[::stride]
-    timestamps  = [float(x.split('/')[-1][:-4]) for x in images_list]
-
-    stereo_reader = StereoReader(image_dirs, calib=calib, stride = stride)
+    stereo_reader = StereoReader_tartan(image_dirs, calib=calib, stride = stride)
     stereo_mathcer = StereoMatcher(args=args_sraft, DEVICE="cuda")
 
     livePlot = LiveTrajectory()
-    for t, (image_p, image_s) in enumerate(stereo_reader):
+    for t, (image_p, image_s, depth) in enumerate(stereo_reader):
         disparity, disparity_low = stereo_mathcer.getDisparity(img1=image_p, img2=image_s)
         warped1, valid_mask      = stereo_mathcer.warp_image1_with_stereo_flow()  
 
@@ -114,6 +110,9 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
         # alpha = 0.6  # weight for original
         # beta = 1 - alpha  # weight for disparity
         # overlay_p = cv2.addWeighted(image_p, alpha, disp_color, beta, 0)
+        normalized_depth = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        color_mapped_depth = cv2.applyColorMap(normalized_depth, cv2.COLORMAP_JET)
+        cv2.imshow('Depth Map', color_mapped_depth)
 
         cv2.imshow("image_p", image_p)
         cv2.imshow("image_s", image_s)
@@ -131,7 +130,7 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
         
         image_p = torch.from_numpy(image_p).permute(2,0,1).cuda()
         image_s = torch.from_numpy(image_s).permute(2,0,1).cuda()
-        images  = (image_p, image_s, disparity)
+        images  = (image_p, image_s, disparity, depth)
 
         if slam is None:
             _, H, W = image_p.shape
@@ -153,7 +152,7 @@ def run(cfg, args_sraft, network, image_dirs, calib, stride=1, skip=0, viz=False
         traj_est = PoseTrajectory3D(
             positions_xyz=poses[:,:3],
             orientations_quat_wxyz=poses[:, [6, 3, 4, 5]],
-            timestamps=np.array(timestamps[:slam.counter])
+            timestamps=np.arange(1, slam.counter + 1).astype(np.float32)
         )
 
         if (slam.counter % 50 == 0) and (slam.counter>1):
@@ -171,11 +170,12 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--network', type=str, default='dpvo.pth')
-    parser.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam0/data/')
-    parser.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/MH_01_easy/mav0/cam1/data/')
-    parser.add_argument('--calib', type=str, default='/home/haktanito/icra2026/DPVO/calib/euroc.yaml')
+    parser.add_argument('--imagedir_p', type=str, default='/home/haktanito/icra2026/datasets/abandonedfactory_sample_P001/P001/image_left')
+    parser.add_argument('--imagedir_s', type=str, default='/home/haktanito/icra2026/datasets/abandonedfactory_sample_P001/P001/image_right')
+    parser.add_argument('--depthdir', type=str, default='/home/haktanito/icra2026/datasets/abandonedfactory_sample_P001/P001/depth_left')
+    parser.add_argument('--calib', type=str, default='/home/haktanito/icra2026/DPVO/calib/tartan.yaml')
     parser.add_argument('--name', type=str, help='name your run', default='result')
-    parser.add_argument('--stride', type=int, default=2)
+    parser.add_argument('--stride', type=int, default=1)
     parser.add_argument('--skip', type=int, default=0)
     parser.add_argument('--config', default="config/default.yaml")
     parser.add_argument('--timeit', action='store_true')
@@ -220,8 +220,8 @@ if __name__ == '__main__':
 
     print("Running with config...")
     print(cfg)
-    img_dirs = (args.imagedir_p, args.imagedir_s)
-    (poses, tstamps), (points, colors, calib) = run(cfg, args_sraft, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
+    img_dirs = (args.imagedir_p, args.imagedir_s, args.depthdir)
+    (poses, tstamps), (points, colors) = run(cfg, args_sraft, args.network, img_dirs, args.calib, args.stride, args.skip, args.viz, args.timeit)
     trajectory = PoseTrajectory3D(positions_xyz=poses[:,:3], orientations_quat_wxyz=poses[:, [6, 3, 4, 5]], timestamps=tstamps)
 
     
@@ -239,7 +239,3 @@ if __name__ == '__main__':
     if args.plot:
         Path("trajectory_plots").mkdir(exist_ok=True)
         plot_trajectory(trajectory, title=f"DPVO Trajectory Prediction for {args.name}", filename=f"trajectory_plots/{args.name}.pdf")
-
-
-        
-

@@ -9,10 +9,11 @@ import torch.nn.functional as F
 
 
 class StereoMatcher:
-    def __init__(self, args, DEVICE="cuda"):
+    def __init__(self, args, RES=4, DEVICE="cuda"):
         
         self.args = args
         self.DEVICE = DEVICE
+        self.RES = RES
 
         self.model = torch.nn.DataParallel(RAFTStereo(self.args), device_ids=[0])
         self.model.load_state_dict(torch.load(self.args.restore_ckpt))
@@ -25,13 +26,18 @@ class StereoMatcher:
         self.img1 = self.img2torch(img1)
         self.img2 = self.img2torch(img2)
 
+        # Dowsample the image
+        self.img1 = F.interpolate(self.img1, scale_factor=1/self.RES, mode='bilinear', align_corners=False)
+        self.img2 = F.interpolate(self.img2, scale_factor=1/self.RES, mode='bilinear', align_corners=False)
+
         self.padder = InputPadder(self.img1.shape, divis_by=32)
         img1, img2 = self.padder.pad(self.img1, self.img2)
 
-        _, flow_up = self.model(img1, img2, iters=self.args.valid_iters, test_mode=True)
+        flow_down, flow_up = self.model(img1, img2, iters=self.args.valid_iters, test_mode=True)
         self.disparity = self.padder.unpad(flow_up).squeeze()
+        flow_down = flow_down.squeeze()
 
-        return self.disparity
+        return self.disparity, flow_down[0]
     
     def img2torch(self, img):
         img = img.astype(np.uint8)

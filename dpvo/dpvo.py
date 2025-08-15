@@ -26,21 +26,30 @@ class Disparity:
         self.height = height
         self.device = device
 
-        self.dis = torch.empty((0, self.height, self.width), dtype=torch.float32, device=self.device)
-        self.map = torch.empty((0,), dtype=torch.uint16, device=self.device)
+        self.dis = torch.zeros(self.N, self.height, self.width, dtype=torch.float32, device=self.device)
     
-    def add_disparity(self, i, disparity):
-        i  = torch.tensor(i, dtype=torch.uint16, device=self.device)
+    # def add_disparity(self, i, disparity):
+    #     i  = torch.tensor(i, dtype=torch.uint16, device=self.device)
 
-        self.dis = torch.cat([self.dis, disparity.unsqueeze(0)], dim=0)
-        self.map = torch.cat([self.map, i.unsqueeze(0)], dim=0)
+    #     # self.dis = torch.cat([self.dis, disparity.unsqueeze(0)], dim=0)
+    #     # self.map = torch.cat([self.map, i.unsqueeze(0)], dim=0)
 
-    def delete_disparities(self, remove_i_values):
-        # remove_values = torch.tensor([3, 5, 7], device=self.device)
-        mask = ~torch.isin(self.map, remove_i_values)
+    # def delete_disparities(self, remove_i_values):
+    #     # remove_values = torch.tensor([3, 5, 7], device=self.device)
+    #     mask = ~torch.isin(self.map, remove_i_values)
 
-        self.disparities = self.disparities[mask]
-        self.map         = self.map[mask]
+    #     self.disparities = self.disparities[mask]
+    #     # self.map         = self.map[mask]
+
+
+class Depth:
+    def __init__(self, N, width, height, device="cuda"):
+        self.N      = N
+        self.width  = width
+        self.height = height
+        self.device = device
+
+        self.dis = np.zeros((self.N, self.height, self.width), dtype=np.float32)
 
 class DPVO:
 
@@ -88,9 +97,10 @@ class DPVO:
         self.imap_ = torch.zeros(self.pmem, self.M, DIM, **kwargs)
         self.gmap_ = torch.zeros(self.pmem, self.M, 128, self.P, self.P, **kwargs)
 
-        self.pg             = PatchGraph(self.cfg, self.P, self.DIM, self.pmem, **kwargs)
+        self.pg              = PatchGraph(self.cfg, self.P, self.DIM, self.pmem, **kwargs)
 
-        self.disparities    = Disparity(N=self.cfg.BUFFER_SIZE, width=self.wd, height=self.ht, device="cuda")
+        self.disparity_graph = Disparity(N=self.cfg.BUFFER_SIZE, width=wd, height=ht, device="cuda")
+        self.depth_graph     = Depth(N=self.cfg.BUFFER_SIZE, width=self.wd, height=self.ht, device="cuda")
 
         # classic backend
         if self.cfg.CLASSIC_LOOP_CLOSURE:
@@ -156,7 +166,11 @@ class DPVO:
     
     @property
     def disparity(self):
-        return self.disparities.dis.view(self.counter, self.ht, self.wd)
+        return self.disparity_graph.dis.view(self.N, self.ht//4, self.wd//4)
+    
+    @property
+    def depth(self):
+        return self.depth_graph.dis.view(self.N, self.ht//4, self.wd//4)
 
     @property
     def patches(self):
@@ -319,19 +333,22 @@ class DPVO:
             to_remove = (self.pg.ii == k) | (self.pg.jj == k)
             self.remove_factors(to_remove, store=False)
 
+            # self.disparities.dis = torch.cat([self.disparities.dis[:k], self.disparities.dis[k+1:]])
+
             self.pg.kk[self.pg.ii > k] -= self.M
             self.pg.ii[self.pg.ii > k] -= 1
             self.pg.jj[self.pg.jj > k] -= 1
 
             for i in range(k, self.n-1):
                 self.pg.tstamps_[i]       = self.pg.tstamps_[i+1]
-                self.disparities.map[i]   = self.disparities.map[i+1]
-                self.disparities.dis[i]   = self.disparities.dis[i+1]
                 self.pg.colors_[i]        = self.pg.colors_[i+1]
                 self.pg.poses_[i]         = self.pg.poses_[i+1]
                 self.pg.patches_[i]       = self.pg.patches_[i+1]
                 self.pg.intrinsics_p_[i]  = self.pg.intrinsics_p_[i+1]
                 self.pg.intrinsics_s_[i]  = self.pg.intrinsics_s_[i+1]
+
+                self.disparity_graph.dis[i] = self.disparity_graph.dis[i+1] 
+                self.depth_graph.dis[i] = self.depth_graph.dis[i+1] 
 
                 self.imap_[i % self.pmem] = self.imap_[(i+1) % self.pmem]
                 self.gmap_[i % self.pmem] = self.gmap_[(i+1) % self.pmem]
@@ -394,13 +411,31 @@ class DPVO:
                     t0 = max(t0, 1)
                     # import time
                     # start_t = time.monotonic_ns()
+                    idx = np.random.randint(1,self.n*96)
+                    source_frame = self.pg.ii[idx].item()
+                    target_frame = self.pg.jj[idx].item()
+                    patch_id     = self.pg.kk[idx].item()
+                    px           = int(self.patches[0,patch_id,0,1,1].item())
+                    py           = int(self.patches[0,patch_id,1,1,1].item())
+                    alpha        = self.patches[0,patch_id,2,1,1].item() / self.livePlot.scale
+                    dis          = self.disparity_graph.dis[source_frame,py,px].item()
+                    # actual_depth = self.depth_graph.dis[source_frame, py*4, px*4]
+                    stereo_inv_depth = dis / ( self.intrinsics_p[0,0,0].item() * self.extrinsics[0,0,0].item() )
+
+                    # print(f"({source_frame},{patch_id}) - ({px*4},{py*4}), actual_depth : {actual_depth:.2f}, stereo_depth : {1/(abs(stereo_inv_depth)+0.0001):.2f}, estim_depth : {1/(alpha+0.00001):.2f}, disparity : {dis:.3f}, scale : {self.livePlot.scale}")
+                    print(f"({source_frame},{patch_id}) - ({px*4},{py*4}), stereo_depth : {1/(abs(stereo_inv_depth)+0.0001):.2f}, estim_depth : {1/(alpha+0.00001):.2f}, disparity : {dis:.3f}, scale : {self.livePlot.scale:.2f}")
+                    ########## Visualize The Dİsparity And The Patch Here
+
                     fastba.BA(self.poses, self.patches, self.intrinsics_p, self.intrinsics_s, self.extrinsics, 
                         target, self.disparity, weight, lmbda, self.pg.ii, self.pg.jj, self.pg.kk, t0, self.n, M=self.M, iterations=2, eff_impl=False)
                     # stop_t  = time.monotonic_ns()
                     # elapsed_time = (stop_t - start_t) * (1e-6)
                     # print(f"Elapsed time : {elapsed_time} ms") 
-            except:
-                print("Warning BA failed...")
+            except Exception as e:
+                print("Warning: BA failed...")
+                import traceback
+                traceback.print_exc()
+                print(f"Error details: {e}")
 
             points = pops.point_cloud(SE3(self.poses), self.patches[:, :self.m], self.intrinsics_p, self.ix[:self.m])
             points = (points[...,1,1,:3] / points[...,1,1,3:]).reshape(-1, 3)
@@ -421,12 +456,13 @@ class DPVO:
         return flatmeshgrid(torch.arange(t0, t1, device="cuda"),
             torch.arange(max(self.n-r, 0), self.n, device="cuda"), indexing='ij')
 
-    def __call__(self, tstamp, images, intrinsics_p, intrinsics_s, extrinsics, right_frame=False):
+    def __call__(self, tstamp, images, intrinsics_p, intrinsics_s, extrinsics, livePlot = None):
         """ track new frame """
-
+        self.livePlot = livePlot
         image_p   = images[0]
         image_s   = images[1]
         disparity = images[2]
+        
 
         if self.cfg.CLASSIC_LOOP_CLOSURE:
             self.long_term_lc(image_p, self.n)
@@ -455,8 +491,10 @@ class DPVO:
         self.pg.tstamps_[self.n]      = self.counter
 
         ### Add Disparities
-        self.disparities.add_disparity(i=self.counter, disparity=disparity)
-        print(self.disparities.dis.shape)
+        self.disparity_graph.dis[self.n] = disparity
+        # if livePlot is not None:
+        #     depth     = images[3]
+        #     self.depth_graph.dis[self.n]     = depth
 
         # Here, we need the stereo disparity
         # self.disparities.map[self.n]  = self.counter
@@ -492,6 +530,12 @@ class DPVO:
         if self.is_initialized:
             s = torch.median(self.pg.patches_[self.n-3:self.n,:,2])
             patches[:,:,2] = s
+        # This has no signifcant effect ın the optimization
+        # for idx in range(patches.size(1)):
+        #     x = int(patches[0,idx,0,1,1].item())
+        #     y = int(patches[0,idx,1,1,1].item())
+        #     inv_depth = abs( disparity[y,x].item() / (extrinsics[0,0].item()*intrinsics_p[0].item()) )
+        #     patches[0,0,2,:,:] = inv_depth
 
         self.pg.patches_[self.n] = patches
 

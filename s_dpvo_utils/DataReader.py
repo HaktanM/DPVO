@@ -13,6 +13,100 @@ def load_yaml(filename):
         return yaml.safe_load(f)
     
 
+class StereoReader_tartan:
+    def __init__(self, image_dirs, calib, stride = 2, maxsize=8):
+        self.image_dirs = image_dirs
+        self.calib = load_yaml(calib)
+        self.fx_p, self.fy_p, self.cx_p, self.cy_p = np.array(self.calib['cam0']['intrinsics'])
+        self.fx_s, self.fy_s, self.cx_s, self.cy_s = np.array(self.calib['cam1']['intrinsics'])
+
+        self.stride     = stride
+
+        # Load the intrinsics for primary camera
+        self.K_p      = np.eye(3)
+        self.K_p[0,0] = self.fx_p
+        self.K_p[0,2] = self.cx_p
+        self.K_p[1,1] = self.fy_p
+        self.K_p[1,2] = self.cy_p
+        self.distortion_coeffs_p = np.array(self.calib['cam0']['distortion_coeffs'])
+
+        # Load the intrinsics for secondary camera
+        self.K_s      = np.eye(3)
+        self.K_s[0,0] = self.fx_s
+        self.K_s[0,2] = self.cx_s
+        self.K_s[1,1] = self.fy_s
+        self.K_s[1,2] = self.cy_s
+        self.distortion_coeffs_s = np.array(self.calib['cam1']['distortion_coeffs'])
+
+        # Load the extrinsic calibration:
+        # Rigid transformation from primary camera frame to secondary camera frame
+        self.T_p_to_s = np.array(self.calib['T_cam0_to_cam1']).reshape(4,4)
+
+        # Collect images
+        self.img_exts  = ["*.png", "*.jpeg", "*.jpg"]
+        self.img_left_list   = []
+        self.img_right_list  = []
+        self.depth_left_list = []
+
+        for ext in self.img_exts:
+            for f in glob.glob(os.path.join(self.image_dirs[0], ext)):
+                fname = os.path.basename(f)
+                img_id = os.path.splitext(fname)[0].split("_")[0]  # parse timestamp from name
+                left_img_name  = img_id + "_left.png"
+                right_img_name = img_id + "_right.png"
+
+                left_depth_name = img_id + "_left_depth.npy"
+
+                self.img_left_list.append(left_img_name)
+                self.img_right_list.append(right_img_name)
+                self.depth_left_list.append(left_depth_name)
+
+        # Sort by timestamp
+        self.img_left_list.sort()
+        self.img_right_list.sort()
+        self.depth_left_list.sort()
+
+        # Apply stride (skip frames)
+        self.img_left_list  = self.img_left_list[::self.stride]
+        self.img_right_list = self.img_right_list[::self.stride]
+
+        self.R_p_to_s   = self.T_p_to_s[:3, :3]
+        self.q_p_to_s   = pp.from_matrix(torch.from_numpy(self.R_p_to_s), ltype=pp.SO3_type, check=False).data.to(torch.float32)
+        self.t_p_in_s   = torch.from_numpy(self.T_p_to_s[:3, 3]).to(torch.float32)
+        self.rp_to_rs   = torch.cat([self.t_p_in_s, self.q_p_to_s], dim=0).unsqueeze(0)  # shape (1,7)
+
+        intrinsics_rp = np.array([self.K_p[0,0], self.K_p[1,1], self.K_p[0,2], self.K_p[1,2]])
+        intrinsics_rs = np.array([self.K_s[0,0], self.K_s[1,1], self.K_s[0,2], self.K_s[1,2]])
+
+        self.intrinsics_rp = torch.from_numpy(intrinsics_rp).cuda()
+        self.intrinsics_rs = torch.from_numpy(intrinsics_rs).cuda()
+        self.extrinsics    = self.rp_to_rs.cuda()
+
+
+    def __len__(self):
+        return len(self.img_left_list)
+    
+    def __getitem__(self, idx):
+
+        # Get the image name
+        img_name_left  = self.img_left_list[idx]
+        img_name_right = self.img_right_list[idx]
+        
+        depth_name_left = self.depth_left_list[idx]
+
+        # Read the primary and secondary images
+        path_to_primary_image = os.path.join(self.image_dirs[0], img_name_left)
+        image_p      = cv2.imread(str(path_to_primary_image))
+        path_to_secondary_image = os.path.join(self.image_dirs[1], img_name_right) 
+        image_s      = cv2.imread(str(path_to_secondary_image))
+
+        path_to_left_depth = os.path.join(self.image_dirs[2], depth_name_left) 
+        depth              = np.load(str(path_to_left_depth))
+
+        return image_p, image_s, depth
+    
+
+
 class StereoReader:
     def __init__(self, image_dirs, calib, stride = 2, maxsize=8):
         self.image_dirs = image_dirs
